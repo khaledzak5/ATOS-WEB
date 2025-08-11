@@ -1,13 +1,177 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Icon from '../../../components/AppIcon';
 import Button from '../../../components/ui/Button';
 
-const VideoUpload = ({ onVideoAnalysis, isAnalyzing = false }) => {
+const VideoUpload = ({ onVideoAnalysis, isAnalyzing = false, selectedExercise }) => {
   const [dragActive, setDragActive] = useState(false);
   const [uploadedVideo, setUploadedVideo] = useState(null);
   const [analysisResults, setAnalysisResults] = useState(null);
+  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+  const [pushupCount, setPushupCount] = useState(0);
+  const [plankSeconds, setPlankSeconds] = useState(0);
+  const [postureStatus, setPostureStatus] = useState('unknown');
+  const [poseResults, setPoseResults] = useState(null);
+  const [showPoseOverlay, setShowPoseOverlay] = useState(true);
+  
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const poseDetectionRef = useRef(null);
+  const processingIntervalRef = useRef(null);
+
+  // Initialize pose detection for video
+  const initializePoseDetection = async () => {
+    try {
+      console.log('🎬 Initializing pose detection for video...');
+      
+      // Wait for MediaPipe to be available
+      let attempts = 0;
+      while (!window.Pose && attempts < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
+      
+      if (!window.Pose) {
+        console.error('MediaPipe Pose not available for video');
+        return false;
+      }
+      
+      // Dynamically import the PoseDetectionUtils
+      const module = await import('../../../utils/poseDetection');
+      const PoseDetectionUtils = module.PoseDetectionUtils || module.default;
+      
+      if (!PoseDetectionUtils) {
+        console.error('PoseDetectionUtils not found in module');
+        return false;
+      }
+      
+      poseDetectionRef.current = new PoseDetectionUtils();
+      
+      // Set exercise mode
+      const normalized = (selectedExercise?.name || '').toLowerCase().replace(/[^a-z]/g, '');
+      const mode = normalized.includes('plank') ? 'plank' : (normalized.includes('squat') ? 'squats' : (normalized.includes('lunge') ? 'lunges' : 'pushups'));
+      poseDetectionRef.current.setExerciseMode(mode);
+
+      // Set up callbacks
+      poseDetectionRef.current.setCallbacks({
+        onPushupCount: (count) => {
+          console.log('🔢 Video rep count:', count);
+          setPushupCount(count);
+        },
+        onPostureChange: (status) => {
+          console.log('🧍 Video Posture status:', status);
+          setPostureStatus(status);
+        },
+        onFormFeedback: (feedback) => {
+          console.log('📝 Video Form feedback:', feedback);
+        },
+        onTimeUpdate: (seconds) => {
+          setPlankSeconds(seconds);
+        }
+      });
+      
+      const initialized = await poseDetectionRef.current.initialize();
+      if (initialized) {
+        console.log('✅ Video pose detection initialized successfully!');
+        return true;
+      } else {
+        console.error('❌ Video pose detection initialization failed');
+        return false;
+      }
+    } catch (error) {
+      console.error('❌ Video pose detection initialization failed:', error);
+      return false;
+    }
+  };
+
+  // Start processing video frames
+  const startVideoProcessing = () => {
+    if (!videoRef.current || !poseDetectionRef.current) return;
+    
+    console.log('▶️ Starting video pose processing...');
+    
+    const processFrame = () => {
+      if (videoRef.current && poseDetectionRef.current && !videoRef.current.paused) {
+        poseDetectionRef.current.processFrame(videoRef.current);
+        const results = poseDetectionRef.current.getLastResults();
+        if (results) {
+          setPoseResults(results);
+        }
+      }
+    };
+
+    processingIntervalRef.current = setInterval(processFrame, 200); // 5 FPS
+  };
+
+  // Stop processing video frames
+  const stopVideoProcessing = () => {
+    if (processingIntervalRef.current) {
+      console.log('⏸️ Stopping video pose processing...');
+      clearInterval(processingIntervalRef.current);
+      processingIntervalRef.current = null;
+    }
+  };
+
+  // Handle video play/pause
+  const handleVideoPlay = () => {
+    console.log('▶️ Video play started');
+    setIsVideoPlaying(true);
+    if (poseDetectionRef.current && poseDetectionRef.current.isInitialized) {
+      startVideoProcessing();
+    } else {
+      console.log('⏳ Pose detection not ready yet, will start when initialized');
+    }
+  };
+
+  const handleVideoPause = () => {
+    setIsVideoPlaying(false);
+    stopVideoProcessing();
+  };
+
+  // Draw pose overlay on video
+  const drawPoseOverlay = () => {
+    if (!canvasRef.current || !videoRef.current || !showPoseOverlay || !poseResults) return;
+
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    const ctx = canvas.getContext('2d');
+
+    canvas.width = video.videoWidth || video.clientWidth;
+    canvas.height = video.videoHeight || video.clientHeight;
+
+    if (poseDetectionRef.current && poseResults) {
+      poseDetectionRef.current.drawPoseOverlay(ctx, poseResults, canvas.width, canvas.height);
+    }
+  };
+
+  // Initialize pose detection when video is uploaded (only once per video)
+  useEffect(() => {
+    if (uploadedVideo && !poseDetectionRef.current) {
+      console.log('🎬 Initializing pose detection for new video...');
+      initializePoseDetection().then((success) => {
+        if (success && isVideoPlaying && videoRef.current && !videoRef.current.paused) {
+          console.log('🎬 Starting video processing after initialization');
+          startVideoProcessing();
+        }
+      });
+    }
+    
+    return () => {
+      stopVideoProcessing();
+      if (poseDetectionRef.current) {
+        poseDetectionRef.current.cleanup();
+        poseDetectionRef.current = null;
+      }
+    };
+  }, [uploadedVideo]);
+
+  // Handle pose overlay drawing
+  useEffect(() => {
+    if (isVideoPlaying && showPoseOverlay) {
+      const interval = setInterval(drawPoseOverlay, 100);
+      return () => clearInterval(interval);
+    }
+  }, [isVideoPlaying, showPoseOverlay, poseResults]);
 
   const handleDrag = (e) => {
     e?.preventDefault();
@@ -54,40 +218,75 @@ const VideoUpload = ({ onVideoAnalysis, isAnalyzing = false }) => {
       size: file?.size
     });
 
-    // Simulate analysis after upload
-    setTimeout(() => {
-      analyzeVideo(file);
-    }, 1000);
+    // Reset counters for new video
+    setPushupCount(0);
+    setPostureStatus('unknown');
+    setPoseResults(null);
+    
+    // No need for separate analysis - will be live during playback
+    console.log('📹 Video uploaded, ready for live analysis during playback');
   };
 
-  const analyzeVideo = (file) => {
-    // Mock analysis results
-    const mockResults = {
-      exerciseDetected: "Push-ups",
-      totalReps: 12,
-      formScore: 85,
-      feedback: [
-        { timestamp: "0:05", message: "Good starting position", type: "success" },
-        { timestamp: "0:12", message: "Keep elbows closer to body", type: "warning" },
-        { timestamp: "0:18", message: "Excellent form!", type: "success" },
-        { timestamp: "0:25", message: "Maintain straight back", type: "warning" },
-        { timestamp: "0:32", message: "Perfect push-up technique", type: "success" }
-      ],
-      improvements: [
-        "Keep elbows at 45-degree angle",
-        "Maintain plank position throughout",
-        "Control the descent speed"
-      ],
-      strengths: [
-        "Consistent rep timing",
-        "Good range of motion",
-        "Proper hand placement"
-      ]
-    };
+  const analyzeVideo = async (file) => {
+    try {
+      // For now, use enhanced mock results with some real video info
+      const mockResults = {
+        exerciseDetected: "Push-ups",
+        totalReps: Math.floor(Math.random() * 10) + 8, // Random between 8-17
+        formScore: Math.floor(Math.random() * 30) + 70, // Random between 70-99
+        feedback: [
+          { timestamp: "0:05", message: "Good starting position", type: "success" },
+          { timestamp: "0:12", message: "Keep elbows closer to body", type: "warning" },
+          { timestamp: "0:18", message: "Excellent form!", type: "success" },
+          { timestamp: "0:25", message: "Maintain straight back", type: "warning" },
+          { timestamp: "0:32", message: "Perfect push-up technique", type: "success" },
+          { timestamp: "0:38", message: "AI Analysis: Push-up detected", type: "success" }
+        ],
+        improvements: [
+          "Keep elbows at 45-degree angle",
+          "Maintain plank position throughout", 
+          "Control the descent speed",
+          "Engage core muscles throughout movement"
+        ],
+        strengths: [
+          "Consistent rep timing",
+          "Good range of motion",
+          "Proper hand placement",
+          "Video quality suitable for AI analysis"
+        ],
+        videoInfo: {
+          fileName: file.name,
+          fileSize: formatFileSize(file.size),
+          duration: "~45 seconds (estimated)"
+        }
+      };
 
-    setAnalysisResults(mockResults);
-    if (onVideoAnalysis) {
-      onVideoAnalysis(mockResults);
+      setAnalysisResults(mockResults);
+      if (onVideoAnalysis) {
+        onVideoAnalysis(mockResults);
+      }
+      
+      console.log('Video analysis completed for:', file.name);
+      
+    } catch (error) {
+      console.error('Video analysis error:', error);
+      
+      // Fallback results
+      const fallbackResults = {
+        exerciseDetected: "Push-ups", 
+        totalReps: 10,
+        formScore: 75,
+        feedback: [
+          { timestamp: "0:00", message: "Analysis completed with basic detection", type: "success" }
+        ],
+        improvements: ["Upload a clearer video for better analysis"],
+        strengths: ["Video uploaded successfully"]
+      };
+
+      setAnalysisResults(fallbackResults);
+      if (onVideoAnalysis) {
+        onVideoAnalysis(fallbackResults);
+      }
     }
   };
 
@@ -106,8 +305,23 @@ const VideoUpload = ({ onVideoAnalysis, isAnalyzing = false }) => {
   };
 
   const resetUpload = () => {
+    // Stop video processing
+    stopVideoProcessing();
+    
+    // Clean up pose detection
+    if (poseDetectionRef.current) {
+      poseDetectionRef.current.cleanup();
+      poseDetectionRef.current = null;
+    }
+    
+    // Reset states
     setUploadedVideo(null);
     setAnalysisResults(null);
+    setIsVideoPlaying(false);
+    setPushupCount(0);
+    setPostureStatus('unknown');
+    setPoseResults(null);
+    
     if (fileInputRef?.current) {
       fileInputRef.current.value = '';
     }
@@ -169,16 +383,76 @@ const VideoUpload = ({ onVideoAnalysis, isAnalyzing = false }) => {
       ) : (
         /* Video Preview and Analysis */
         (<div className="space-y-6">
-          {/* Video Preview */}
+          {/* Video Preview with Pose Detection */}
           <div className="space-y-3">
-            <h3 className="text-lg font-medium text-card-foreground">Video Preview</h3>
-            <div className="bg-black rounded-lg overflow-hidden">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-medium text-card-foreground">Video Preview</h3>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowPoseOverlay(!showPoseOverlay)}
+                className="text-sm"
+              >
+                <Icon name={showPoseOverlay ? "Eye" : "EyeOff"} size={16} className="mr-2" />
+                {showPoseOverlay ? 'Hide' : 'Show'} Pose
+              </Button>
+            </div>
+            <div className="relative bg-black rounded-lg overflow-hidden">
               <video
                 ref={videoRef}
                 src={uploadedVideo?.url}
                 controls
                 className="w-full h-64 object-contain"
+                onPlay={handleVideoPlay}
+                onPause={handleVideoPause}
+                onEnded={handleVideoPause}
               />
+              
+              {/* Pose Overlay Canvas */}
+              {showPoseOverlay && (
+                <canvas
+                  ref={canvasRef}
+                  className="absolute inset-0 w-full h-full pointer-events-none"
+                  style={{ zIndex: 10 }}
+                />
+              )}
+              
+              {/* Live Stats Overlay */}
+              {isVideoPlaying && (
+                 <div className="absolute top-4 left-4 bg-black/70 rounded-lg p-3 text-white">
+                  <div className="text-center mb-2">
+                                         <div className="text-2xl font-bold text-green-400">{(poseDetectionRef.current?.exerciseMode === 'plank') ? plankSeconds : pushupCount}</div>
+                    <div className="text-xs text-gray-300">{(poseDetectionRef.current?.exerciseMode === 'plank') ? 'Plank (sec)' : (poseDetectionRef.current?.exerciseMode === 'squats' ? 'Squats' : (poseDetectionRef.current?.exerciseMode === 'lunges' ? 'Lunges' : 'Push-ups'))}</div>
+                  </div>
+                  <div className={`text-xs px-2 py-1 rounded text-center ${
+                    postureStatus === 'correct' ? 'bg-green-500/20 text-green-300' :
+                    postureStatus === 'incorrect' ? 'bg-red-500/20 text-red-300' :
+                    'bg-gray-500/20 text-gray-300'
+                  }`}>
+                    {postureStatus === 'correct' ? '✓ Good Posture' :
+                     postureStatus === 'incorrect' ? '⚠ Fix Posture' :
+                     'Detecting...'}
+                  </div>
+                </div>
+              )}
+              
+              {/* Posture Warning */}
+              {postureStatus === 'incorrect' && isVideoPlaying && (
+                <div className="absolute bottom-20 left-1/2 transform -translate-x-1/2 bg-red-600/90 text-white px-6 py-3 rounded-lg text-center animate-pulse">
+                  <div className="font-bold text-lg">⚠️ DANGEROUS POSTURE!</div>
+                  <div className="text-sm">Straighten your back</div>
+                </div>
+              )}
+              
+              {/* Video Status */}
+              <div className="absolute bottom-4 right-4">
+                <div className="flex items-center space-x-2 bg-black/50 rounded-full px-3 py-1">
+                  <div className={`w-2 h-2 rounded-full ${isVideoPlaying ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`}></div>
+                  <span className="text-white text-sm font-medium">
+                    {isVideoPlaying ? 'Analyzing' : 'Paused'}
+                  </span>
+                </div>
+              </div>
             </div>
             
             <div className="flex items-center justify-between text-sm text-muted-foreground">
@@ -188,6 +462,58 @@ const VideoUpload = ({ onVideoAnalysis, isAnalyzing = false }) => {
               </span>
               <span>{formatFileSize(uploadedVideo?.size)}</span>
             </div>
+            
+            {/* Live Analysis Summary */}
+            {pushupCount > 0 && (
+              <div className="bg-muted rounded-lg p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-md font-semibold text-card-foreground">Live Analysis Results</h4>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const liveResults = {
+                        exerciseDetected: poseDetectionRef.current?.exerciseMode === 'squats' ? 'Squats' : (poseDetectionRef.current?.exerciseMode === 'lunges' ? 'Lunges' : (poseDetectionRef.current?.exerciseMode === 'plank' ? 'Plank' : 'Push-ups')),
+                        totalReps: pushupCount,
+                        formScore: postureStatus === 'correct' ? 85 : postureStatus === 'incorrect' ? 60 : 75,
+                        feedback: [
+                          { timestamp: "Live", message: `${pushupCount} ${(poseDetectionRef.current?.exerciseMode === 'squats') ? 'squats' : (poseDetectionRef.current?.exerciseMode === 'lunges') ? 'lunges' : 'push-ups'} detected`, type: "success" },
+                          { timestamp: "Live", message: `Posture: ${postureStatus}`, type: postureStatus === 'correct' ? 'success' : 'warning' }
+                        ],
+                        improvements: postureStatus === 'incorrect' ? ["Maintain straight back alignment"] : ["Great form!"],
+                        strengths: ["Live AI pose detection", "Real-time analysis"]
+                      };
+                      setAnalysisResults(liveResults);
+                      if (onVideoAnalysis) {
+                        onVideoAnalysis(liveResults);
+                      }
+                    }}
+                  >
+                    <Icon name="FileText" size={16} className="mr-2" />
+                    Generate Report
+                  </Button>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4 text-center">
+                  <div>
+                    <p className="text-xl font-bold text-success">{pushupCount}</p>
+                    <p className="text-sm text-muted-foreground">Reps Detected</p>
+                  </div>
+                  <div>
+                    <p className={`text-xl font-bold ${
+                      postureStatus === 'correct' ? 'text-success' :
+                      postureStatus === 'incorrect' ? 'text-error' :
+                      'text-muted-foreground'
+                    }`}>
+                      {postureStatus === 'correct' ? '✓ Good' :
+                       postureStatus === 'incorrect' ? '⚠ Poor' :
+                       'Detecting'}
+                    </p>
+                    <p className="text-sm text-muted-foreground">Posture</p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           {/* Analysis Loading */}
           {isAnalyzing && (

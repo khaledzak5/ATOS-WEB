@@ -310,10 +310,10 @@ const AIAssistantFoodScanner = () => {
                       </div>
                       <div>
                         <h3 className="font-semibold text-card-foreground">ATOS fit</h3>
-                        <p className="text-sm text-muted-foreground flex items-center space-x-1">
+                        <div className="text-sm text-muted-foreground flex items-center space-x-1">
                           <div className="w-2 h-2 bg-success rounded-full"></div>
                           <span>Online</span>
-                        </p>
+                        </div>
                       </div>
                     </div>
                   </div>

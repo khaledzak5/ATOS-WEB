@@ -1,17 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import Icon from '../../components/AppIcon';
-import { db, recordWorkoutSession, updateAggregateStats } from '../../utils/db';
-import { evaluateAchievements } from '../../utils/achievements';
 import Button from '../../components/ui/Button';
 import CameraFeed from './components/CameraFeed';
 import ExerciseControls from './components/ExerciseControls';
 import VideoUpload from './components/VideoUpload';
 import WorkoutStats from './components/WorkoutStats';
 
+// Import database modules normally - let React handle errors
+import { db, recordWorkoutSession, updateAggregateStats } from '../../utils/db';
+import { evaluateAchievements } from '../../utils/achievements';
+
 const ExerciseWorkoutScreen = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  
+  // Error handling state
+  const [hasError, setHasError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
   const [activeTab, setActiveTab] = useState('live'); // 'live' or 'upload'
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [isWorkoutActive, setIsWorkoutActive] = useState(false);
@@ -28,6 +34,8 @@ const ExerciseWorkoutScreen = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [todayPlan, setTodayPlan] = useState(null);
   const [showCelebration, setShowCelebration] = useState(false);
+  const [aiPushupCount, setAiPushupCount] = useState(0);
+  const [postureStatus, setPostureStatus] = useState('unknown');
   const PLAN_KEY = 'fitcoach_today_plan';
 
   // Mock exercises data
@@ -67,21 +75,32 @@ const ExerciseWorkoutScreen = () => {
     }
   }, [todayPlan, selectedExercise]);
 
-  // Mock rep counting during workout
+  // Define currentExercise early to avoid initialization errors
+  const currentExercise = selectedExercise || (todayPlan?.items?.find(e => !e.completed) || todayPlan?.items?.[0]) || exercises?.[0];
+
+  // Use AI counting for Push-Ups and Squats, mock counting for other exercises
   useEffect(() => {
     if (isWorkoutActive && !isPaused) {
-      const repInterval = setInterval(() => {
-        if (Math.random() > 0.7) { // 30% chance to increment rep
-          setCurrentRep(prev => {
-            const newRep = prev + 1;
-            setRepsCompleted(total => total + 1);
-            return newRep;
-          });
-        }
-      }, 3000);
-      return () => clearInterval(repInterval);
+      const name = (currentExercise?.name || '').toLowerCase();
+      if (name.includes('push') || name.includes('squat') || name.includes('lunge')) {
+        // For Push-Ups and Squats, use AI detection count provided by CameraFeed
+        setCurrentRep(aiPushupCount);
+        setRepsCompleted(aiPushupCount);
+      } else {
+        // For other exercises, use mock counting
+        const repInterval = setInterval(() => {
+          if (Math.random() > 0.7) { // 30% chance to increment rep
+            setCurrentRep(prev => {
+              const newRep = prev + 1;
+              setRepsCompleted(total => total + 1);
+              return newRep;
+            });
+          }
+        }, 3000);
+        return () => clearInterval(repInterval);
+      }
     }
-  }, [isWorkoutActive, isPaused]);
+  }, [isWorkoutActive, isPaused, aiPushupCount, currentExercise]);
 
   const handleWorkoutStart = () => {
     if (!isCameraActive && activeTab === 'live') {
@@ -176,12 +195,37 @@ const ExerciseWorkoutScreen = () => {
   };
 
   const handleCameraToggle = () => {
+    console.log('🎬 Camera toggle clicked! Current state:', isCameraActive, '-> New state:', !isCameraActive);
     setIsCameraActive(!isCameraActive);
   };
 
   const handleFormFeedback = (feedback) => {
     // Handle real-time form feedback
     console.log('Form feedback:', feedback);
+    
+    // Update form score based on feedback
+    if (feedback.type === 'success') {
+      setFormScore(prev => Math.min(100, prev + 2));
+    } else if (feedback.type === 'warning') {
+      setFormScore(prev => Math.max(0, prev - 1));
+    }
+  };
+
+  const handlePushupCount = (count) => {
+    setAiPushupCount(count);
+    console.log('AI Push-up count:', count);
+  };
+
+  const handlePostureChange = (status, landmarks) => {
+    setPostureStatus(status);
+    console.log('Posture status:', status);
+    
+    // Update form score based on posture
+    if (status === 'correct') {
+      setFormScore(prev => Math.min(100, prev + 1));
+    } else if (status === 'incorrect') {
+      setFormScore(prev => Math.max(0, prev - 2));
+    }
   };
 
   const handleVideoAnalysis = (results) => {
@@ -196,8 +240,6 @@ const ExerciseWorkoutScreen = () => {
     setCurrentRep(0);
     setSelectedExercise(exercise);
   };
-
-  const currentExercise = selectedExercise || (todayPlan?.items?.find(e => !e.completed) || todayPlan?.items?.[0]) || exercises?.[0];
 
   const sortedExercises = [...exercises].sort((a, b) => {
     const order = { 'Beginner': 0, 'Intermediate': 1, 'Advanced': 2 };
@@ -257,8 +299,31 @@ const ExerciseWorkoutScreen = () => {
     }
   }, [location?.state]);
 
-  return (
-    <div className="min-h-screen bg-background">
+  // Error boundary fallback
+  if (hasError) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center p-8">
+          <h2 className="text-2xl font-bold text-red-600 mb-4">Exercise Screen Error</h2>
+          <p className="text-gray-600 mb-4">{errorMessage || 'Something went wrong'}</p>
+          <button
+            onClick={() => {
+              setHasError(false);
+              setErrorMessage('');
+              navigate('/dashboard');
+            }}
+            className="bg-blue-500 text-white px-6 py-2 rounded hover:bg-blue-600"
+          >
+            Back to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  try {
+    return (
+      <div className="min-h-screen bg-background">
       {/* Header with Breadcrumb */}
       <div className="bg-card border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -334,6 +399,9 @@ const ExerciseWorkoutScreen = () => {
                   showPoseOverlay={showPoseOverlay}
                   setShowPoseOverlay={setShowPoseOverlay}
                   onFormFeedback={handleFormFeedback}
+                  onPushupCount={handlePushupCount}
+                  onPostureChange={handlePostureChange}
+                  selectedExercise={currentExercise}
                 />
               </div>
               
@@ -386,6 +454,7 @@ const ExerciseWorkoutScreen = () => {
             <VideoUpload
               onVideoAnalysis={handleVideoAnalysis}
               isAnalyzing={isAnalyzing}
+              selectedExercise={currentExercise}
             />
           </div>)
         )}
@@ -471,7 +540,26 @@ const ExerciseWorkoutScreen = () => {
         </div>
       )}
     </div>
-  );
+    );
+  } catch (error) {
+    console.error('ExerciseWorkoutScreen error:', error);
+    setHasError(true);
+    setErrorMessage(error.message || 'Unknown error occurred');
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center p-8">
+          <h2 className="text-2xl font-bold text-red-600 mb-4">Loading Error</h2>
+          <p className="text-gray-600 mb-4">Failed to load exercise screen</p>
+          <button
+            onClick={() => navigate('/dashboard')}
+            className="bg-blue-500 text-white px-6 py-2 rounded hover:bg-blue-600"
+          >
+            Back to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
 };
 
 export default ExerciseWorkoutScreen;

@@ -6,74 +6,165 @@ const CameraFeed = ({
   isActive = false,
   onToggleCamera,
   showPoseOverlay = true,
-  onFormFeedback, setShowPoseOverlay
+  onFormFeedback, 
+  setShowPoseOverlay,
+  onPushupCount,
+  onPostureChange,
+  selectedExercise,
+  onPlankTimeUpdate
 }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const poseDetectionRef = useRef(null);
   const [stream, setStream] = useState(null);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [posePoints, setPosePoints] = useState([]);
+  const [poseResults, setPoseResults] = useState(null);
   const [formFeedback, setFormFeedback] = useState(null);
+  const [pushupCount, setPushupCount] = useState(0);
+  const [postureStatus, setPostureStatus] = useState('unknown');
+  const [isPoseDetectionReady, setIsPoseDetectionReady] = useState(false);
 
-  // Mock pose estimation points for demonstration
-  const mockPosePoints = [
-  { x: 320, y: 180, confidence: 0.9, label: 'nose' },
-  { x: 300, y: 200, confidence: 0.8, label: 'left_shoulder' },
-  { x: 340, y: 200, confidence: 0.8, label: 'right_shoulder' },
-  { x: 280, y: 250, confidence: 0.7, label: 'left_elbow' },
-  { x: 360, y: 250, confidence: 0.7, label: 'right_elbow' },
-  { x: 260, y: 300, confidence: 0.6, label: 'left_wrist' },
-  { x: 380, y: 300, confidence: 0.6, label: 'right_wrist' },
-  { x: 290, y: 350, confidence: 0.8, label: 'left_hip' },
-  { x: 350, y: 350, confidence: 0.8, label: 'right_hip' },
-  { x: 280, y: 450, confidence: 0.7, label: 'left_knee' },
-  { x: 360, y: 450, confidence: 0.7, label: 'right_knee' },
-  { x: 270, y: 550, confidence: 0.6, label: 'left_ankle' },
-  { x: 370, y: 550, confidence: 0.6, label: 'right_ankle' }];
+  // Normalize exercise name
+  const isPushUpsSelected = (() => {
+    const name = (selectedExercise?.name || '').toLowerCase().replace(/[^a-z]/g, '');
+    return name.includes('push');
+  })();
+  const isPlankSelected = (() => {
+    const name = (selectedExercise?.name || '').toLowerCase().replace(/[^a-z]/g, '');
+    return name.includes('plank');
+  })();
+  const isSquatSelected = (() => {
+    const name = (selectedExercise?.name || '').toLowerCase().replace(/[^a-z]/g, '');
+    return name.includes('squat');
+  })();
+  const isLungesSelected = (() => {
+    const name = (selectedExercise?.name || '').toLowerCase().replace(/[^a-z]/g, '');
+    return name.includes('lunge');
+  })();
 
+  // Initialize MediaPipe pose detection
+  const initializePoseDetection = async () => {
+    try {
+      // Only initialize for supported exercises
+      if (!isPushUpsSelected && !isPlankSelected && !isSquatSelected && !isLungesSelected) {
+        return;
+      }
 
-  const mockFeedbackMessages = [
-  { message: "Great form! Keep it up!", type: "success" },
-  { message: "Lower your squat position", type: "warning" },
-  { message: "Keep your back straight", type: "warning" },
-  { message: "Perfect push-up form!", type: "success" },
-  { message: "Slow down the movement", type: "info" }];
+      if (!poseDetectionRef.current) {
+        // Dynamic import to avoid loading MediaPipe for other exercises
+        const { default: PoseDetectionUtils } = await import('../../../utils/poseDetection');
+        poseDetectionRef.current = new PoseDetectionUtils();
+        poseDetectionRef.current.setExerciseMode(isPlankSelected ? 'plank' : (isSquatSelected ? 'squats' : (isLungesSelected ? 'lunges' : 'pushups')));
+        
+        // Set up callbacks
+        poseDetectionRef.current.setCallbacks({
+          onPushupCount: (count) => {
+            setPushupCount(count);
+            if (onPushupCount) {
+              onPushupCount(count);
+            }
+          },
+          onPostureChange: (status, landmarks) => {
+            setPostureStatus(status);
+            if (onPostureChange) {
+              onPostureChange(status, landmarks);
+            }
+          },
+          onFormFeedback: (feedback) => {
+            setFormFeedback(feedback);
+            if (onFormFeedback) {
+              onFormFeedback(feedback);
+            }
+            // Auto-hide feedback after 3 seconds
+            setTimeout(() => setFormFeedback(null), 3000);
+          },
+          onTimeUpdate: (sec) => {
+            // Bridge time updates to parent and trigger re-render
+            if (onPlankTimeUpdate) onPlankTimeUpdate(sec);
+            setPoseResults(poseDetectionRef.current?.getLastResults() || null);
+          }
+        });
+        
+        const initialized = await poseDetectionRef.current.initialize();
+        if (!initialized) {
+          console.warn('Pose detection not available, falling back to basic mode');
+          // Don't set error, just continue without pose detection
+        } else {
+          console.log('✅ MediaPipe pose detection initialized successfully for', isPlankSelected ? 'Plank' : (isSquatSelected ? 'Squats' : (isLungesSelected ? 'Lunges' : 'Push-Ups')));
+          setIsPoseDetectionReady(true);
+        }
+      }
+    } catch (error) {
+      console.error('Error initializing pose detection:', error);
+      // Don't set error state, just continue without pose detection
+    }
+  };
 
 
   useEffect(() => {
+    console.log('🎬 isActive changed:', isActive);
     if (isActive) {
       startCamera();
-      // Simulate pose detection updates
-      const poseInterval = setInterval(() => {
-        if (showPoseOverlay) {
-          setPosePoints(mockPosePoints?.map((point) => ({
-            ...point,
-            x: point?.x + (Math.random() - 0.5) * 10,
-            y: point?.y + (Math.random() - 0.5) * 10
-          })));
-        }
-      }, 100);
-
-      // Simulate form feedback
-      const feedbackInterval = setInterval(() => {
-        const randomFeedback = mockFeedbackMessages?.[Math.floor(Math.random() * mockFeedbackMessages?.length)];
-        setFormFeedback(randomFeedback);
-        if (onFormFeedback) onFormFeedback(randomFeedback);
-
-        setTimeout(() => setFormFeedback(null), 3000);
-      }, 8000);
-
-      return () => {
-        clearInterval(poseInterval);
-        clearInterval(feedbackInterval);
-      };
+      initializePoseDetection();
     } else {
       stopCamera();
     }
-  }, [isActive, showPoseOverlay]);
+  }, [isActive]);
+
+  // Process video frames for pose detection
+  useEffect(() => {
+    console.log('🔄 Processing effect triggered:', {
+      isActive,
+      hasPoseDetection: !!poseDetectionRef.current,
+      hasVideo: !!videoRef.current,
+      exercise: selectedExercise?.name,
+      videoReadyState: videoRef.current?.readyState,
+      poseDetectionInitialized: poseDetectionRef.current?.isInitialized
+    });
+
+    console.log('🔍 Checking processing conditions:', {
+      isActive,
+      hasPoseDetection: !!poseDetectionRef.current,
+      hasVideo: !!videoRef.current,
+      exercise: selectedExercise?.name,
+      isPushUps: isPushUpsSelected,
+      isPlank: isPlankSelected,
+      isPoseDetectionReady
+    });
+
+    if (isActive && poseDetectionRef.current && videoRef.current && (isPushUpsSelected || isPlankSelected || isSquatSelected || isLungesSelected)) {
+      console.log('✅ Starting frame processing interval');
+      
+      const processFrame = () => {
+        if (poseDetectionRef.current && videoRef.current && videoRef.current.readyState >= 2) {
+          console.log('🎬 Processing frame - video ready state:', videoRef.current.readyState);
+          poseDetectionRef.current.processFrame(videoRef.current);
+          // Update pose results for drawing
+          const results = poseDetectionRef.current.getLastResults();
+          if (results) {
+            setPoseResults(results);
+            // Only log occasionally to avoid spam
+            if (results.poseLandmarks && Math.random() < 0.1) {
+              console.log('🎯 Pose detected! Landmarks count:', results.poseLandmarks.length);
+            }
+          }
+        } else {
+          console.log('⏳ Video not ready yet, state:', videoRef.current?.readyState);
+        }
+      };
+
+      const interval = setInterval(processFrame, 200); // Process at 5 FPS
+      console.log('⏰ Interval started with ID:', interval);
+      return () => {
+        console.log('🛑 Cleaning up interval');
+        clearInterval(interval);
+      };
+    }
+  }, [isActive, selectedExercise, isPoseDetectionReady]);
 
   const startCamera = async () => {
+    console.log('📹 Starting camera...');
     setIsLoading(true);
     setError(null);
 
@@ -87,15 +178,18 @@ const CameraFeed = ({
         audio: false
       });
 
+      console.log('✅ Camera stream obtained');
       setStream(mediaStream);
       if (videoRef?.current) {
         videoRef.current.srcObject = mediaStream;
+        console.log('✅ Video stream set to video element');
       }
     } catch (err) {
       setError('Camera access denied. Please enable camera permissions.');
-      console.error('Camera error:', err);
+      console.error('❌ Camera error:', err);
     } finally {
       setIsLoading(false);
+      console.log('📹 Camera loading finished');
     }
   };
 
@@ -104,12 +198,32 @@ const CameraFeed = ({
       stream?.getTracks()?.forEach((track) => track?.stop());
       setStream(null);
     }
-    setPosePoints([]);
+    setPoseResults(null);
     setFormFeedback(null);
+    
+    // Clean up pose detection
+    if (poseDetectionRef.current) {
+      poseDetectionRef.current.cleanup();
+      poseDetectionRef.current = null;
+    }
+    
+    // Reset pose detection state
+    setIsPoseDetectionReady(false);
   };
 
   const drawPoseOverlay = () => {
-    if (!canvasRef?.current || !videoRef?.current || !showPoseOverlay) return;
+    console.log('🎨 drawPoseOverlay called:', {
+      hasCanvas: !!canvasRef?.current,
+      hasVideo: !!videoRef?.current,
+      showPoseOverlay,
+      hasPoseResults: !!poseResults,
+      poseResultsLandmarks: poseResults?.poseLandmarks?.length
+    });
+
+    if (!canvasRef?.current || !videoRef?.current || !showPoseOverlay || !poseResults) {
+      console.log('❌ Drawing skipped - missing requirements');
+      return;
+    }
 
     const canvas = canvasRef?.current;
     const video = videoRef?.current;
@@ -118,50 +232,13 @@ const CameraFeed = ({
     canvas.width = video?.videoWidth || 640;
     canvas.height = video?.videoHeight || 480;
 
-    ctx?.clearRect(0, 0, canvas?.width, canvas?.height);
+    console.log('🎨 Canvas dimensions:', canvas.width, 'x', canvas.height);
 
-    // Draw pose points
-    posePoints?.forEach((point) => {
-      if (point?.confidence > 0.5) {
-        ctx?.beginPath();
-        ctx?.arc(point?.x, point?.y, 4, 0, 2 * Math.PI);
-        ctx.fillStyle = point?.confidence > 0.7 ? '#10B981' : '#F59E0B';
-        ctx?.fill();
-        ctx.strokeStyle = '#FFFFFF';
-        ctx.lineWidth = 2;
-        ctx?.stroke();
-      }
-    });
-
-    // Draw skeleton connections
-    const connections = [
-    ['left_shoulder', 'right_shoulder'],
-    ['left_shoulder', 'left_elbow'],
-    ['left_elbow', 'left_wrist'],
-    ['right_shoulder', 'right_elbow'],
-    ['right_elbow', 'right_wrist'],
-    ['left_shoulder', 'left_hip'],
-    ['right_shoulder', 'right_hip'],
-    ['left_hip', 'right_hip'],
-    ['left_hip', 'left_knee'],
-    ['left_knee', 'left_ankle'],
-    ['right_hip', 'right_knee'],
-    ['right_knee', 'right_ankle']];
-
-
-    connections?.forEach(([start, end]) => {
-      const startPoint = posePoints?.find((p) => p?.label === start);
-      const endPoint = posePoints?.find((p) => p?.label === end);
-
-      if (startPoint && endPoint && startPoint?.confidence > 0.5 && endPoint?.confidence > 0.5) {
-        ctx?.beginPath();
-        ctx?.moveTo(startPoint?.x, startPoint?.y);
-        ctx?.lineTo(endPoint?.x, endPoint?.y);
-        ctx.strokeStyle = '#3B82F6';
-        ctx.lineWidth = 2;
-        ctx?.stroke();
-      }
-    });
+    // Use MediaPipe's built-in drawing function if available
+    if (poseDetectionRef.current && poseResults) {
+      console.log('🎨 Calling poseDetection.drawPoseOverlay...');
+      poseDetectionRef.current.drawPoseOverlay(ctx, poseResults, canvas.width, canvas.height);
+    }
   };
 
   useEffect(() => {
@@ -169,7 +246,17 @@ const CameraFeed = ({
       const interval = setInterval(drawPoseOverlay, 100);
       return () => clearInterval(interval);
     }
-  }, [isActive, showPoseOverlay, posePoints]);
+  }, [isActive, showPoseOverlay, poseResults]);
+
+  // Reset counter when exercise changes
+  useEffect(() => {
+    if (poseDetectionRef.current && (isPushUpsSelected || isPlankSelected || isSquatSelected || isLungesSelected)) {
+      poseDetectionRef.current.setExerciseMode(isPlankSelected ? 'plank' : (isSquatSelected ? 'squats' : (isLungesSelected ? 'lunges' : 'pushups')));
+      poseDetectionRef.current.resetCounter();
+      setPushupCount(0);
+      setPostureStatus('unknown');
+    }
+  }, [selectedExercise]);
 
   if (error) {
     return (
@@ -210,7 +297,10 @@ const CameraFeed = ({
       {showPoseOverlay &&
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 w-full h-full pointer-events-none" />
+        className="absolute inset-0 w-full h-full pointer-events-none"
+        style={{ 
+          zIndex: 10
+        }} />
 
       }
       {/* Camera Controls Overlay */}
@@ -233,6 +323,25 @@ const CameraFeed = ({
           <Icon name={isActive ? "CameraOff" : "Camera"} size={18} />
         </Button>
       </div>
+      {/* Stats Overlay - Push-Ups: reps, Plank: time */}
+      {(isPushUpsSelected || isPlankSelected || isSquatSelected || isLungesSelected) && isActive && (
+        <div className="absolute top-4 left-4 bg-black/70 rounded-lg p-3 text-white">
+          <div className="text-center mb-2">
+            <div className="text-2xl font-bold text-green-400">{isPlankSelected ? (poseDetectionRef.current?.getStats()?.timeSec || 0) : pushupCount}</div>
+            <div className="text-xs text-gray-300">{isPlankSelected ? 'Plank (sec)' : (isSquatSelected ? 'Squats' : (isLungesSelected ? 'Lunges' : 'Push-ups'))}</div>
+          </div>
+          <div className={`text-xs px-2 py-1 rounded text-center ${
+            postureStatus === 'correct' ? 'bg-green-500/20 text-green-300' :
+            postureStatus === 'incorrect' ? 'bg-red-500/20 text-red-300' :
+            'bg-gray-500/20 text-gray-300'
+          }`}>
+            {postureStatus === 'correct' ? '✓ Good Posture' :
+             postureStatus === 'incorrect' ? '⚠ Fix Posture' :
+             'Detecting...'}
+          </div>
+        </div>
+      )}
+
       {/* Form Feedback Overlay */}
       {formFeedback &&
       <div className={`absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 px-4 py-2 rounded-lg text-white font-medium text-center max-w-xs animate-spring ${
@@ -242,6 +351,14 @@ const CameraFeed = ({
           {formFeedback?.message}
         </div>
       }
+
+      {/* Posture Warning Overlay - Only for incorrect posture */}
+      {postureStatus === 'incorrect' && (isPushUpsSelected || isPlankSelected || isSquatSelected || isLungesSelected) && (
+        <div className="absolute bottom-20 left-1/2 transform -translate-x-1/2 bg-red-600/90 text-white px-6 py-3 rounded-lg text-center animate-pulse">
+          <div className="font-bold text-lg">⚠️ DANGEROUS POSTURE!</div>
+          <div className="text-sm">Straighten your back / reach proper depth</div>
+        </div>
+      )}
       {/* Camera Status Indicator */}
       <div className="absolute bottom-4 left-4">
         <div className="flex items-center space-x-2 bg-black/50 rounded-full px-3 py-1">
