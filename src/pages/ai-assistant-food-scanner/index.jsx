@@ -113,8 +113,8 @@ const AIAssistantFoodScanner = () => {
     }
   }, [messages, isTyping]);
 
+  const CHATBOT_API_KEY = import.meta.env.VITE_CHATBOT_API_KEY;
   const handleSendMessage = async (message) => {
-    // Add user message
     const userMessage = {
       id: Date.now(),
       message,
@@ -122,96 +122,142 @@ const AIAssistantFoodScanner = () => {
       timestamp: new Date()
     };
     setMessages(prev => [...prev, userMessage]);
-
-    // Show typing indicator
     setIsTyping(true);
 
-    // Simulate AI response
-    setTimeout(() => {
-      const aiResponses = [
-        `Great question! Based on your fitness goals, I'd recommend focusing on compound movements that work multiple muscle groups. This will help you build strength efficiently while burning more calories.\n\nHere are some key exercises to include:\n• Squats (3 sets of 8-12 reps)\n• Push-ups (3 sets of 10-15 reps)\n• Lunges (3 sets of 10 per leg)\n• Planks (3 sets of 30-60 seconds)\n\nWould you like me to create a full workout routine for you?`,
-        `Excellent! Nutrition plays a crucial role in achieving your fitness goals. Here's what I recommend:\n\n**Pre-workout (30-60 min before):**\n• Banana with almond butter\n• Greek yogurt with berries\n\n**Post-workout (within 30 min):**\n• Protein shake with whey protein\n• Chocolate milk\n• Grilled chicken with sweet potato\n\nRemember to stay hydrated throughout your workout!`,
-        `Form is absolutely critical for both safety and effectiveness! Here are key points to remember:\n\n**For Squats:**\n• Keep your chest up and core engaged\n• Knees track over your toes\n• Go down until thighs are parallel to floor\n\n**For Push-ups:**\n• Maintain straight line from head to heels\n• Lower until chest nearly touches ground\n• Push through your palms, not fingertips\n\nWould you like me to analyze your form through video upload?`,
-        `That's a smart approach! Progressive overload is key to continuous improvement. Here's how to implement it:\n\n**Week 1-2:** Master the movement pattern\n**Week 3-4:** Increase reps by 2-3 per set\n**Week 5-6:** Add weight or increase difficulty\n**Week 7-8:** Reduce rest time between sets\n\nTrack your progress and listen to your body. Consistency beats intensity every time!`
-      ];
-
-      const randomResponse = aiResponses?.[Math.floor(Math.random() * aiResponses?.length)];
-      
+    try {
+      const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-goog-api-key': CHATBOT_API_KEY
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: message }
+              ]
+            }
+          ]
+        })
+      });
+      const data = await response.json();
+      let aiText = 'Sorry, no response from AI.';
+      if (Array.isArray(data?.candidates) && data.candidates.length > 0) {
+        const parts = data.candidates[0]?.content?.parts;
+        if (Array.isArray(parts) && parts.length > 0 && typeof parts[0].text === 'string') {
+          aiText = parts[0].text.trim() || aiText;
+        }
+      }
       const aiMessage = {
         id: Date.now() + 1,
-        message: randomResponse,
+        message: aiText,
         isUser: false,
         timestamp: new Date()
       };
-
-      setIsTyping(false);
       setMessages(prev => [...prev, aiMessage]);
-    }, 2000);
+    } catch (error) {
+      const aiMessage = {
+        id: Date.now() + 1,
+        message: 'Error contacting AI service.',
+        isUser: false,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, aiMessage]);
+    } finally {
+      setIsTyping(false);
+    }
   };
 
   const handleFoodCapture = async (file, scanType) => {
     setIsScanning(true);
-    
-    // Simulate food analysis
-    setTimeout(() => {
-      const mockResults = [
-        {
-          name: "Apple",
-          calories: 95,
-          protein: 0.5,
-          carbohydrates: 25,
-          sugar: 19,
-          fat: 0.3,
-          servingSize: "1 medium (182g)",
-          confidence: 0.92,
-          image: URL.createObjectURL(file),
-          recommendation: "Apples are a great source of fiber and vitamin C. Perfect as a pre-workout snack for quick energy!",
-          additionalInfo: {
-            allergens: "None",
-            healthScore: 4
-          }
+    try {
+      // Convert image file to base64
+      const toBase64 = (file) => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const imageBase64 = await toBase64(file);
+
+      const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-goog-api-key': CHATBOT_API_KEY
         },
-        {
-          name: "Grilled Salmon",
-          calories: 206,
-          protein: 22,
-          carbohydrates: 0,
-          sugar: 0,
-          fat: 12,
-          servingSize: "100g",
-          confidence: 0.88,
-          image: URL.createObjectURL(file),
-          recommendation: "Excellent source of omega-3 fatty acids and high-quality protein. Perfect for muscle building and recovery!",
-          additionalInfo: {
-            allergens: "Fish",
-            healthScore: 5
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  inline_data: {
+                    mime_type: file.type,
+                    data: imageBase64
+                  }
+                },
+                {
+                  text:
+                    `Analyze this food image and predict its nutritional components. Always return a valid JSON object with these exact fields: { "name": string, "calories": number, "protein": number, "carbohydrates": number, "fat": number, "sugar": number, "serving_size": string, "recommendation": string, "allergens": string, "health_score": number }. Do not include any explanation or text outside the JSON. If you are unsure about the sugar content, estimate based on the food type.`
+                }
+              ]
+            }
+          ]
+        })
+      });
+      const data = await response.json();
+      let result = null;
+      let rawText = '';
+      if (Array.isArray(data?.candidates) && data.candidates.length > 0) {
+        const parts = data.candidates[0]?.content?.parts;
+        if (Array.isArray(parts) && parts.length > 0 && typeof parts[0].text === 'string') {
+          rawText = parts[0].text;
+          // Try to extract JSON from the response, even if embedded in a string
+          let jsonMatch = rawText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            try {
+              result = JSON.parse(jsonMatch[0]);
+            } catch {
+              // fallback to top-level parse
+              try {
+                result = JSON.parse(rawText);
+              } catch {
+                result = null;
+              }
+            }
+          } else {
+            // fallback to top-level parse
+            try {
+              result = JSON.parse(rawText);
+            } catch {
+              result = null;
+            }
           }
-        },
-        {
-          name: "Quinoa Bowl",
-          calories: 222,
-          protein: 8,
-          carbohydrates: 39,
-          sugar: 2,
-          fat: 4,
-          servingSize: "1 cup cooked (185g)",
-          confidence: 0.85,
-          image: URL.createObjectURL(file),
-          recommendation: "Complete protein with all essential amino acids. Great post-workout meal for recovery and sustained energy!",
-          additionalInfo: {
-            allergens: "None",
-            healthScore: 5
+          // If still no result, fallback to showing raw text as recommendation
+          if (!result) {
+            result = {
+              name: 'Unknown',
+              recommendation: rawText || 'No prediction from AI.'
+            };
           }
         }
-      ];
-
-      const randomResult = mockResults?.[Math.floor(Math.random() * mockResults?.length)];
-      randomResult.scanType = scanType;
-      randomResult.timestamp = new Date();
-      
-      setScanResult(randomResult);
+      }
+      if (result) {
+        result.image = URL.createObjectURL(file);
+        result.scanType = scanType;
+        result.timestamp = new Date();
+        setScanResult(result);
+      } else {
+        setScanResult({ name: 'Unknown', recommendation: rawText || 'No prediction from AI.', image: URL.createObjectURL(file), scanType, timestamp: new Date() });
+      }
+    } catch (error) {
+      setScanResult({ name: 'Error', recommendation: 'Error contacting AI service.', image: URL.createObjectURL(file), scanType, timestamp: new Date() });
+    } finally {
       setIsScanning(false);
-    }, 3000);
+    }
   };
 
   const handleSaveToHistory = (result) => {
@@ -310,10 +356,10 @@ const AIAssistantFoodScanner = () => {
                       </div>
                       <div>
                         <h3 className="font-semibold text-card-foreground">ATOS fit</h3>
-                        <div className="text-sm text-muted-foreground flex items-center space-x-1">
+                        <p className="text-sm text-muted-foreground flex items-center space-x-1">
                           <div className="w-2 h-2 bg-success rounded-full"></div>
                           <span>Online</span>
-                        </div>
+                        </p>
                       </div>
                     </div>
                   </div>

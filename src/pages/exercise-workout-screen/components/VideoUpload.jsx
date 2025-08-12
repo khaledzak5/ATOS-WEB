@@ -49,7 +49,12 @@ const VideoUpload = ({ onVideoAnalysis, isAnalyzing = false, selectedExercise })
       
       // Set exercise mode
       const normalized = (selectedExercise?.name || '').toLowerCase().replace(/[^a-z]/g, '');
-      const mode = normalized.includes('plank') ? 'plank' : (normalized.includes('squat') ? 'squats' : (normalized.includes('lunge') ? 'lunges' : 'pushups'));
+      let mode = 'pushups';
+      if (normalized.includes('plank')) mode = 'plank';
+      else if (normalized.includes('squat')) mode = 'squats';
+      else if (normalized.includes('lunge')) mode = 'lunges';
+      else if (normalized.includes('burpee')) mode = 'burpees';
+      else if (normalized.includes('mountain') || normalized.includes('climber')) mode = 'mountainclimbers';
       poseDetectionRef.current.setExerciseMode(mode);
 
       // Set up callbacks

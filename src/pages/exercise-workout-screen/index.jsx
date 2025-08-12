@@ -88,17 +88,23 @@ const ExerciseWorkoutScreen = () => {
   const currentExercise = selectedExercise || (todayPlan?.items?.find(e => !e.completed) || todayPlan?.items?.[0]) || exercises?.[0];
 
   // Use AI counting for Push-Ups and Squats, mock counting for other exercises
+  // Add Burpees detection
+  const isBurpeesSelected = (() => {
+    const name = (selectedExercise?.name || '').toLowerCase().replace(/[^a-z]/g, '');
+    return name.includes('burpee');
+  })();
+
   useEffect(() => {
     if (isWorkoutActive && !isPaused) {
       const name = (currentExercise?.name || '').toLowerCase();
-      if (name.includes('push') || name.includes('squat') || name.includes('lunge')) {
-        // For Push-Ups and Squats, use AI detection count provided by CameraFeed
+      if (name.includes('push') || name.includes('squat') || name.includes('lunge') || name.includes('burpee')) {
+        // For Push-Ups, Squats, Lunges, Burpees: use AI detection count provided by CameraFeed
         setCurrentRep(aiPushupCount);
         setRepsCompleted(aiPushupCount);
       } else {
         // For other exercises, use mock counting
         const repInterval = setInterval(() => {
-          if (Math.random() > 0.7) { // 30% chance to increment rep
+          if (Math.random() > 0.7) {
             setCurrentRep(prev => {
               const newRep = prev + 1;
               setRepsCompleted(total => total + 1);

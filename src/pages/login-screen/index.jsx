@@ -18,19 +18,16 @@ const LoginScreen = () => {
 
   const handleLogin = async (formData) => {
     setIsLoading(true);
-    
     try {
       // Use database for authentication
-      const { validateUser, getOrCreateUserByEmail } = await import('../../utils/db');
-      
+      const { validateUser } = await import('../../utils/db');
       // First try to validate existing user
       let user = await validateUser(formData?.email, formData?.password);
-      
       if (!user) {
-        // If user doesn't exist, create new user
-        user = await getOrCreateUserByEmail(formData?.email, formData?.email.split('@')[0]);
+        alert('الحساب غير موجود أو كلمة المرور غير صحيحة. يرجى التسجيل أولاً.');
+        setIsLoading(false);
+        return;
       }
-      
       // Store user data in localStorage
       localStorage.setItem('atos_user', JSON.stringify({
         id: user.id,
@@ -39,12 +36,10 @@ const LoginScreen = () => {
         avatar: user.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name)}&background=random`,
         loginTime: new Date().toISOString()
       }));
-
       // Smooth transition to dashboard
       setTimeout(() => {
         navigate('/dashboard', { replace: true });
       }, 500);
-      
     } catch (error) {
       console.error('Login error:', error);
     } finally {

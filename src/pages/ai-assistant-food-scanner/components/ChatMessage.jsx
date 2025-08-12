@@ -1,7 +1,11 @@
 import React from 'react';
 import Icon from '../../../components/AppIcon';
 
+// Access the API key from environment variable
+const CHATBOT_API_KEY = import.meta.env.VITE_CHATBOT_API_KEY;
+
 const ChatMessage = ({ message, isUser, timestamp, isTyping = false }) => {
+  // You can use CHATBOT_API_KEY in your API calls
   const formatTime = (date) => {
     return new Date(date)?.toLocaleTimeString('en-US', {
       hour: '2-digit',

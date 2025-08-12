@@ -24,6 +24,8 @@ class PoseDetectionUtils {
     if (normalized === 'plank') this.exerciseMode = 'plank';
     else if (normalized === 'squats' || normalized === 'squat') this.exerciseMode = 'squats';
     else if (normalized === 'lunges' || normalized === 'lunge') this.exerciseMode = 'lunges';
+    else if (normalized === 'burpees' || normalized === 'burpee') this.exerciseMode = 'burpees';
+    else if (normalized.includes('mountain') || normalized.includes('climber')) this.exerciseMode = 'mountainclimbers';
     else this.exerciseMode = 'pushups';
   }
 
@@ -151,8 +153,8 @@ class PoseDetectionUtils {
 
     const landmarks = results.poseLandmarks;
     
-    // For squats, lunges, and pushups: always show correct posture to avoid confusion
-    if (this.exerciseMode === 'squats' || this.exerciseMode === 'lunges' || this.exerciseMode === 'pushups') {
+    // For squats, lunges, pushups, burpees: always show correct posture to avoid confusion
+    if (this.exerciseMode === 'squats' || this.exerciseMode === 'lunges' || this.exerciseMode === 'pushups' || this.exerciseMode === 'burpees') {
       this.postureStatus = 'correct';
       if (this.onPostureChange) {
         this.onPostureChange('correct', landmarks);
@@ -213,13 +215,17 @@ class PoseDetectionUtils {
     }
 
     // Count reps depending on mode
-    if (this.exerciseMode === 'squats') {
-      this.updateSquatCounter(landmarks);
-    } else if (this.exerciseMode === 'lunges') {
-      this.updateLungesCounter(landmarks);
-    } else {
-      this.updatePushupCounter(landmarks);
-    }
+      if (this.exerciseMode === 'squats') {
+        this.updateSquatCounter(landmarks);
+      } else if (this.exerciseMode === 'lunges') {
+        this.updateLungesCounter(landmarks);
+      } else if (this.exerciseMode === 'burpees') {
+        this.updateBurpeesCounter(landmarks);
+      } else if (this.exerciseMode === 'mountainclimbers') {
+        this.updateMountainClimbersCounter(landmarks);
+      } else {
+        this.updatePushupCounter(landmarks);
+      }
   }
 
   // Calculate angle between three points
@@ -465,47 +471,30 @@ class PoseDetectionUtils {
     try {
       const cfg = window.MediaPipeConfig?.POSE_LANDMARKS || {};
       const lcfg = window.MediaPipeConfig?.LUNGES_CONFIG || {};
-
       const leftHip = landmarks[cfg.LEFT_HIP || 23];
       const rightHip = landmarks[cfg.RIGHT_HIP || 24];
       const leftKnee = landmarks[cfg.LEFT_KNEE || 25];
       const rightKnee = landmarks[cfg.RIGHT_KNEE || 26];
       const leftAnkle = landmarks[cfg.LEFT_ANKLE || 27];
       const rightAnkle = landmarks[cfg.RIGHT_ANKLE || 28];
-
       if (!leftHip || !rightHip || !leftKnee || !rightKnee || !leftAnkle || !rightAnkle) return;
-
       // Average hip position
       const hip = { x: (leftHip.x + rightHip.x) / 2, y: (leftHip.y + rightHip.y) / 2 };
-
       // Calculate knee angles
       const leftKneeAngle = this.calculateAngle(leftHip, leftKnee, leftAnkle);
       const rightKneeAngle = this.calculateAngle(rightHip, rightKnee, rightAnkle);
-
       // Determine which leg is front (more bent knee)
       const leftKneeBent = leftKneeAngle < rightKneeAngle;
       const frontKnee = leftKneeBent ? leftKnee : rightKnee;
       const backKnee = leftKneeBent ? rightKnee : leftAnkle;
       const frontKneeAngle = leftKneeBent ? leftKneeAngle : rightKneeAngle;
       const backKneeAngle = leftKneeBent ? rightKneeAngle : leftKneeAngle;
-
       // Hip position relative to front knee
       const hipBelowFrontKnee = hip.y > frontKnee.y;
-
-      const frontKneeDownThreshold = lcfg.FRONT_KNEE_ANGLE_DOWN ?? 85;
-      const frontKneeUpThreshold = lcfg.FRONT_KNEE_ANGLE_UP ?? 160;
-      const backKneeDownThreshold = lcfg.BACK_KNEE_ANGLE_DOWN ?? 90;
-      const backKneeUpThreshold = lcfg.BACK_KNEE_ANGLE_UP ?? 150;
-
       // Lunge position: either knee bent enough OR hips go down (very lenient)
-      const lungePosition = ((frontKneeAngle <= frontKneeDownThreshold) || 
-                            (backKneeAngle <= backKneeDownThreshold) || 
-                            hipBelowFrontKnee);
-      
+      const lungePosition = ((frontKneeAngle <= 85) || (backKneeAngle <= 90) || hipBelowFrontKnee);
       // Standing position: both knees straight
-      const standingPosition = (frontKneeAngle >= frontKneeUpThreshold) && 
-                              (backKneeAngle >= backKneeUpThreshold);
-
+      const standingPosition = (frontKneeAngle >= 160) && (backKneeAngle >= 150);
       // Simple counting: count immediately when going down (like squats)
       if (this.pushupState === 'up') {
         if (lungePosition) {
@@ -523,6 +512,129 @@ class PoseDetectionUtils {
       }
     } catch (error) {
       console.error('Error updating lunges counter:', error);
+    }
+  }
+
+  // Add Burpees counter
+  // Update mountain climbers counter
+  updateMountainClimbersCounter(landmarks) {
+    try {
+      const config = window.MediaPipeConfig?.POSE_LANDMARKS || {};
+      
+      // Get key body points
+      const leftHip = landmarks[config.LEFT_HIP || 23];
+      const rightHip = landmarks[config.RIGHT_HIP || 24];
+      const leftKnee = landmarks[config.LEFT_KNEE || 25];
+      const rightKnee = landmarks[config.RIGHT_KNEE || 26];
+      const leftAnkle = landmarks[config.LEFT_ANKLE || 27];
+      const rightAnkle = landmarks[config.RIGHT_ANKLE || 28];
+
+      if (!leftHip || !rightHip || !leftKnee || !rightKnee || !leftAnkle || !rightAnkle) return;
+
+      // Calculate vertical distances between knees and hips
+      const leftKneeToHipY = Math.abs(leftKnee.y - leftHip.y);
+      const rightKneeToHipY = Math.abs(rightKnee.y - rightHip.y);
+
+      // Initialize states if needed
+      if (!this._lastLeftKneeY) this._lastLeftKneeY = leftKnee.y;
+      if (!this._lastRightKneeY) this._lastRightKneeY = rightKnee.y;
+      if (!this._climberState) this._climberState = 'neutral';
+      if (!this._lastClimberTime) this._lastClimberTime = Date.now();
+      
+      const KNEE_THRESHOLD = 0.05; // How far the knee needs to move
+      const MIN_REP_TIME = 250; // Minimum time between reps (ms)
+      const currentTime = Date.now();
+
+      // Calculate knee movements
+      const leftKneeMove = leftKnee.y - this._lastLeftKneeY;
+      const rightKneeMove = rightKnee.y - this._lastRightKneeY;
+
+      // Check for significant knee movements in opposite directions
+      const isAlternating = (leftKneeMove > KNEE_THRESHOLD && rightKneeMove < -KNEE_THRESHOLD) ||
+                           (leftKneeMove < -KNEE_THRESHOLD && rightKneeMove > KNEE_THRESHOLD);
+
+      // State machine for counting alternating leg movements
+      if (this._climberState === 'neutral') {
+        if (isAlternating && (currentTime - this._lastClimberTime > MIN_REP_TIME)) {
+          this._climberState = 'moving';
+          this._lastClimberTime = currentTime;
+          // Count the rep
+          this.pushupCount += 1;
+          if (this.onPushupCount) this.onPushupCount(this.pushupCount);
+          if (this.onFormFeedback) {
+            const leg = leftKneeMove > rightKneeMove ? 'Left' : 'Right';
+            this.onFormFeedback({
+              message: `${leg} knee drive - Rep ${this.pushupCount}`,
+              type: 'success',
+              timestamp: currentTime
+            });
+          }
+        }
+      } else if (this._climberState === 'moving') {
+        if (!isAlternating) {
+          this._climberState = 'neutral';
+        }
+      }
+
+      // Update last positions
+      this._lastLeftKneeY = leftKnee.y;
+      this._lastRightKneeY = rightKnee.y;
+
+      // Form feedback for incorrect movement
+      if (Math.abs(leftHip.y - rightHip.y) > 0.1) { // Hips not level
+        if (this.onFormFeedback && Math.random() < 0.1) {
+          this.onFormFeedback({
+            message: "Keep hips level!",
+            type: "warning",
+            timestamp: currentTime
+          });
+        }
+      }
+
+    } catch (error) {
+      console.error('Error updating mountain climbers counter:', error);
+    }
+  }
+
+  updateBurpeesCounter(landmarks) {
+    try {
+      const config = window.MediaPipeConfig?.POSE_LANDMARKS || {};
+      // نقاط الرأس واليدين
+      const nose = landmarks[config.NOSE || 0];
+      const leftWrist = landmarks[config.LEFT_WRIST || 15];
+      const rightWrist = landmarks[config.RIGHT_WRIST || 16];
+      const leftIndex = landmarks[config.LEFT_INDEX || 19];
+      const rightIndex = landmarks[config.RIGHT_INDEX || 20];
+      if (!nose || !leftWrist || !rightWrist) return;
+      // أعلى نقطة للرأس
+      const headY = nose.y;
+      // أعلى نقطة لليد أو الأصابع
+      const leftHandY = leftIndex ? leftIndex.y : leftWrist.y;
+      const rightHandY = rightIndex ? rightIndex.y : rightWrist.y;
+      // إذا كانت اليدين أو الأصابع أعلى من الرأس (أقل في قيمة y)
+      const handsAboveHead = (leftHandY < headY && rightHandY < headY);
+      // منطق العد
+      if (!this._burpeeState) this._burpeeState = 'ready';
+      if (this._burpeeState === 'ready') {
+        if (handsAboveHead) {
+          this._burpeeState = 'jumping';
+          this.pushupCount += 1;
+          if (this.onPushupCount) this.onPushupCount(this.pushupCount);
+          if (this.onFormFeedback) {
+            this.onFormFeedback({
+              message: `Burpee ${this.pushupCount} - Hands above head!`,
+              type: 'success',
+              timestamp: Date.now()
+            });
+          }
+        }
+      } else if (this._burpeeState === 'jumping') {
+        if (!handsAboveHead) {
+          this._burpeeState = 'ready';
+        }
+      }
+    } catch (error) {
+      console.error('Error updating burpees counter:', error);
     }
   }
 

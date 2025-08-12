@@ -42,12 +42,21 @@ const CameraFeed = ({
     const name = (selectedExercise?.name || '').toLowerCase().replace(/[^a-z]/g, '');
     return name.includes('lunge');
   })();
+  const isMountainClimbersSelected = (() => {
+    const name = (selectedExercise?.name || '').toLowerCase().replace(/[^a-z]/g, '');
+    return name.includes('mountain') || name.includes('climber');
+  })();
+  // Add Burpees detection
+  const isBurpeesSelected = (() => {
+    const name = (selectedExercise?.name || '').toLowerCase().replace(/[^a-z]/g, '');
+    return name.includes('burpee');
+  })();
 
   // Initialize MediaPipe pose detection
   const initializePoseDetection = async () => {
     try {
       // Only initialize for supported exercises
-      if (!isPushUpsSelected && !isPlankSelected && !isSquatSelected && !isLungesSelected) {
+      if (!isPushUpsSelected && !isPlankSelected && !isSquatSelected && !isLungesSelected && !isBurpeesSelected) {
         return;
       }
 
@@ -55,8 +64,13 @@ const CameraFeed = ({
         // Dynamic import to avoid loading MediaPipe for other exercises
         const { default: PoseDetectionUtils } = await import('../../../utils/poseDetection');
         poseDetectionRef.current = new PoseDetectionUtils();
-        poseDetectionRef.current.setExerciseMode(isPlankSelected ? 'plank' : (isSquatSelected ? 'squats' : (isLungesSelected ? 'lunges' : 'pushups')));
-        
+        poseDetectionRef.current.setExerciseMode(
+          isPlankSelected ? 'plank' :
+          isSquatSelected ? 'squats' :
+          isLungesSelected ? 'lunges' :
+          isBurpeesSelected ? 'burpees' :
+          'pushups'
+        );
         // Set up callbacks
         poseDetectionRef.current.setCallbacks({
           onPushupCount: (count) => {
@@ -80,24 +94,19 @@ const CameraFeed = ({
             setTimeout(() => setFormFeedback(null), 3000);
           },
           onTimeUpdate: (sec) => {
-            // Bridge time updates to parent and trigger re-render
             if (onPlankTimeUpdate) onPlankTimeUpdate(sec);
             setPoseResults(poseDetectionRef.current?.getLastResults() || null);
           }
         });
-        
         const initialized = await poseDetectionRef.current.initialize();
         if (!initialized) {
           console.warn('Pose detection not available, falling back to basic mode');
-          // Don't set error, just continue without pose detection
         } else {
-          console.log('✅ MediaPipe pose detection initialized successfully for', isPlankSelected ? 'Plank' : (isSquatSelected ? 'Squats' : (isLungesSelected ? 'Lunges' : 'Push-Ups')));
           setIsPoseDetectionReady(true);
         }
       }
     } catch (error) {
       console.error('Error initializing pose detection:', error);
-      // Don't set error state, just continue without pose detection
     }
   };
 
@@ -133,7 +142,7 @@ const CameraFeed = ({
       isPoseDetectionReady
     });
 
-    if (isActive && poseDetectionRef.current && videoRef.current && (isPushUpsSelected || isPlankSelected || isSquatSelected || isLungesSelected)) {
+    if (isActive && poseDetectionRef.current && videoRef.current && (isPushUpsSelected || isPlankSelected || isSquatSelected || isLungesSelected || isBurpeesSelected)) {
       console.log('✅ Starting frame processing interval');
       
       const processFrame = () => {
@@ -250,8 +259,14 @@ const CameraFeed = ({
 
   // Reset counter when exercise changes
   useEffect(() => {
-    if (poseDetectionRef.current && (isPushUpsSelected || isPlankSelected || isSquatSelected || isLungesSelected)) {
-      poseDetectionRef.current.setExerciseMode(isPlankSelected ? 'plank' : (isSquatSelected ? 'squats' : (isLungesSelected ? 'lunges' : 'pushups')));
+    if (poseDetectionRef.current && (isPushUpsSelected || isPlankSelected || isSquatSelected || isLungesSelected || isBurpeesSelected)) {
+      poseDetectionRef.current.setExerciseMode(
+        isPlankSelected ? 'plank' :
+        isSquatSelected ? 'squats' :
+        isLungesSelected ? 'lunges' :
+        isBurpeesSelected ? 'burpees' :
+        'pushups'
+      );
       poseDetectionRef.current.resetCounter();
       setPushupCount(0);
       setPostureStatus('unknown');
@@ -324,11 +339,34 @@ const CameraFeed = ({
         </Button>
       </div>
       {/* Stats Overlay - Push-Ups: reps, Plank: time */}
-      {(isPushUpsSelected || isPlankSelected || isSquatSelected || isLungesSelected) && isActive && (
+      {(isPushUpsSelected || isPlankSelected || isSquatSelected || isLungesSelected || isMountainClimbersSelected) && isActive && (
         <div className="absolute top-4 left-4 bg-black/70 rounded-lg p-3 text-white">
           <div className="text-center mb-2">
             <div className="text-2xl font-bold text-green-400">{isPlankSelected ? (poseDetectionRef.current?.getStats()?.timeSec || 0) : pushupCount}</div>
-            <div className="text-xs text-gray-300">{isPlankSelected ? 'Plank (sec)' : (isSquatSelected ? 'Squats' : (isLungesSelected ? 'Lunges' : 'Push-ups'))}</div>
+            <div className="text-xs text-gray-300">
+              {isPlankSelected ? 'Plank (sec)' : 
+               isSquatSelected ? 'Squats' :
+               isLungesSelected ? 'Lunges' :
+               isMountainClimbersSelected ? 'Mountain Climbers' : 'Push-ups'}
+            </div>
+          </div>
+          <div className={`text-xs px-2 py-1 rounded text-center ${
+            postureStatus === 'correct' ? 'bg-green-500/20 text-green-300' :
+            postureStatus === 'incorrect' ? 'bg-red-500/20 text-red-300' :
+            'bg-gray-500/20 text-gray-300'
+          }`}>
+            {postureStatus === 'correct' ? '✓ Good Posture' :
+             postureStatus === 'incorrect' ? '⚠ Fix Posture' :
+             'Detecting...'}
+          </div>
+        </div>
+      )}
+      {/* Stats Overlay - Burpees */}
+      {(isBurpeesSelected && isActive) && (
+        <div className="absolute top-4 left-4 bg-black/70 rounded-lg p-3 text-white">
+          <div className="text-center mb-2">
+            <div className="text-2xl font-bold text-green-400">{pushupCount}</div>
+            <div className="text-xs text-gray-300">Burpees</div>
           </div>
           <div className={`text-xs px-2 py-1 rounded text-center ${
             postureStatus === 'correct' ? 'bg-green-500/20 text-green-300' :
