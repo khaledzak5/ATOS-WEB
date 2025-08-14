@@ -58,7 +58,12 @@ const ExerciseWorkoutScreen = () => {
   // Timer effect for active workout
   useEffect(() => {
     let interval = null;
-    if (isWorkoutActive && !isPaused) {
+    // Determine which exercise to evaluate for plank: prefer selectedExercise, fall back to first static exercise
+    const effectiveExerciseName = String((selectedExercise || exercises?.[0])?.name || '').toLowerCase();
+    const isPlankExercise = effectiveExerciseName.includes('plank');
+    const shouldIncrementTimer = isWorkoutActive && !isPaused && (!isPlankExercise || postureStatus === 'correct');
+
+    if (shouldIncrementTimer) {
       interval = setInterval(() => {
         setWorkoutTime(time => time + 1);
         // Mock data updates during workout
@@ -70,11 +75,10 @@ const ExerciseWorkoutScreen = () => {
         });
         setFormScore(prev => Math.min(100, prev + Math.random() * 2));
       }, 1000);
-    } else if (!isWorkoutActive) {
-      clearInterval(interval);
     }
+
     return () => clearInterval(interval);
-  }, [isWorkoutActive, isPaused]);
+  }, [isWorkoutActive, isPaused, postureStatus, selectedExercise?.name]);
 
   // If resuming with a stored plan, select first incomplete
   useEffect(() => {
@@ -313,6 +317,105 @@ const ExerciseWorkoutScreen = () => {
       } catch {}
     }
   }, [location?.state]);
+
+  // Track live session items for calorie calculation
+  const [sessionItems, setSessionItems] = useState([]); // { name, reps, sets, durationSec, completed }
+
+  useEffect(() => {
+    // Keep a running caloriesBurned based on sessionItems and user weight
+    let mounted = true;
+    (async () => {
+      try {
+        const { calculateSessionCalories } = await import('../../utils/calories');
+        const user = JSON.parse(localStorage.getItem('atos_user') || '{}');
+        const { total } = calculateSessionCalories(sessionItems, user);
+        if (mounted) setCaloriesBurned(total);
+      } catch (error) {
+        console.error('Failed calculating calories:', error);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [sessionItems]);
+
+  // Update sessionItems as reps/time update
+  useEffect(() => {
+    if (!currentExercise) return;
+    const name = currentExercise?.name || '';
+    const isPlankExercise = String(name).toLowerCase().includes('plank');
+
+    // For rep-based exercises we map aiPushupCount -> reps
+    if (isWorkoutActive && !isPaused && (name.toLowerCase().includes('push') || name.toLowerCase().includes('squat') || name.toLowerCase().includes('lunge') || name.toLowerCase().includes('burpee') || name.toLowerCase().includes('mountain')) ) {
+      // Update or create session item for this exercise
+      setSessionItems(prev => {
+        const copy = [...prev];
+        const idx = copy.findIndex(s => normalizeName(s.name) === normalizeName(name));
+        const reps = aiPushupCount;
+        if (idx >= 0) {
+          copy[idx] = { ...copy[idx], reps, completed: false };
+        } else {
+          copy.push({ name, reps, sets: 1, completed: false });
+        }
+        return copy;
+      });
+    }
+
+    // For plank, use posture-correct seconds from workoutTimeForPlank (derived from poseDetection onTimeUpdate via props)
+    // We'll rely on workoutTime state for the UI but need to store durationSec for the plank item
+    if (isPlankExercise) {
+      setSessionItems(prev => {
+        const copy = [...prev];
+        const idx = copy.findIndex(s => normalizeName(s.name) === normalizeName(name));
+        const durationSec = workoutTime; // workoutTime now reflects accumulated correct seconds for plank
+        if (idx >= 0) {
+          copy[idx] = { ...copy[idx], durationSec, completed: false };
+        } else {
+          copy.push({ name, durationSec, sets: 1, completed: false });
+        }
+        return copy;
+      });
+    }
+  }, [aiPushupCount, workoutTime, isWorkoutActive, isPaused, currentExercise]);
+
+  // When workout stops/completes, persist session and update aggregate stats including calories
+  const persistSessionAndStats = async () => {
+    try {
+      const sessionItemsToSave = sessionItems.map(i => ({ ...i }));
+      const sessionUser = JSON.parse(localStorage.getItem('atos_user') || '{}');
+      if (sessionUser?.id) {
+        const { recordWorkoutSession, updateAggregateStats } = await import('../../utils/db');
+        const sessionId = await recordWorkoutSession(sessionUser.id, sessionItemsToSave);
+        // Compute calories and attach to user profile
+        const { calculateSessionCalories } = await import('../../utils/calories');
+        const { total, breakdown } = calculateSessionCalories(sessionItemsToSave, sessionUser);
+
+        // Update user's total calories burned in profile and stats
+        await updateAggregateStats(sessionUser.id, sessionItemsToSave);
+        // Save total calories on user profile
+        try {
+          const { updateUserProfile, getUserById } = await import('../../utils/db');
+          const dbUser = await getUserById(sessionUser.id);
+          const prevTotal = Number(dbUser?.totalCaloriesBurned || 0);
+          const newTotal = prevTotal + total;
+          await updateUserProfile(sessionUser.id, { totalCaloriesBurned: newTotal, totalWorkoutTime: (Number(dbUser?.totalWorkoutTime || 0) + (workoutTime || 0)) });
+        } catch (err) {
+          console.error('Error updating user profile with calories:', err);
+        }
+
+        console.log('Session saved', sessionId, 'calories', total, breakdown);
+      }
+    } catch (error) {
+      console.error('Error persisting session:', error);
+    }
+  };
+
+  // Call persist when stopping or completing workout
+  useEffect(() => {
+    if (!isWorkoutActive && workoutTime > 0) {
+      // Persist session on stop
+      persistSessionAndStats();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isWorkoutActive]);
 
   // Error boundary fallback
   if (hasError) {

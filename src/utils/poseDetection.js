@@ -255,10 +255,19 @@ class PoseDetectionUtils {
       const leftAnkle = landmarks[config.LEFT_ANKLE || 27];
       const rightAnkle = landmarks[config.RIGHT_ANKLE || 28];
 
-      // Require visibility
+      // Require visibility. For plank allow side-view (one side) visibility; for other exercises require both sides for stability.
       const vis = (p) => p && (p.visibility == null || p.visibility > 0.5);
-      if (!vis(leftShoulder) || !vis(rightShoulder) || !vis(leftHip) || !vis(rightHip) || !vis(leftKnee) || !vis(rightKnee)) {
-        return false;
+      if (this.exerciseMode === 'plank') {
+        const leftSideOk = vis(leftShoulder) && vis(leftHip);
+        const rightSideOk = vis(rightShoulder) && vis(rightHip);
+        if (!leftSideOk && !rightSideOk) {
+          // Not enough landmarks to evaluate plank reliably
+          return false;
+        }
+      } else {
+        if (!vis(leftShoulder) || !vis(rightShoulder) || !vis(leftHip) || !vis(rightHip) || !vis(leftKnee) || !vis(rightKnee)) {
+          return false;
+        }
       }
 
       // Calculate center points
@@ -288,29 +297,58 @@ class PoseDetectionUtils {
 
       let isGoodPosture = false;
       if (this.exerciseMode === 'plank') {
-        // Plank: near-horizontal straight line + knee straightness
-        let cosSim = -1;
-        if (v2) {
-          const mag1 = Math.hypot(v1.x, v1.y) || 1;
-          const mag2 = Math.hypot(v2.x, v2.y) || 1;
-          cosSim = (v1.x * v2.x + v1.y * v2.y) / (mag1 * mag2);
-        }
+        // Plank: support both front-facing and side-view evaluation.
         const cfg = window.MediaPipeConfig?.PLANK_CONFIG || {};
-        const absCos = Math.abs(Math.max(-1, Math.min(1, cosSim)));
-        const straightEnough = v2 ? (absCos >= (cfg.STRAIGHT_ABS_COS_MIN ?? 0.90)) : false;
-        const dx = shoulderCenter.x - hipCenter.x;
-        const dy = shoulderCenter.y - hipCenter.y;
-        const orientDeg = Math.abs(Math.atan2(dy, dx) * 180 / Math.PI);
-        const horizMax = cfg.HORIZ_MAX_DEG ?? 35;
-        const nearHorizontal = (orientDeg <= horizMax) || (orientDeg >= (180 - horizMax));
-        let kneeOk = true;
-        if (ankleCenter) {
-          const leftKneeAngle = this.calculateAngle(leftHip, leftKnee, leftAnkle);
-          const rightKneeAngle = this.calculateAngle(rightHip, rightKnee, rightAnkle);
-          const kneeMin = cfg.KNEE_MIN_DEG ?? 150;
-          kneeOk = (leftKneeAngle >= kneeMin) && (rightKneeAngle >= kneeMin);
+
+        // Prefer side-view detection when one full side is visible (shoulder, hip, ankle)
+        const leftSideVisible = vis(leftShoulder) && vis(leftHip) && vis(leftAnkle);
+        const rightSideVisible = vis(rightShoulder) && vis(rightHip) && vis(rightAnkle);
+
+        if (leftSideVisible || rightSideVisible) {
+          const shoulder = leftSideVisible ? leftShoulder : rightShoulder;
+          const hip = leftSideVisible ? leftHip : rightHip;
+          const ankle = leftSideVisible ? leftAnkle : rightAnkle;
+
+          // Angle at hip between shoulder-hip-ankle: near 180° for a straight plank
+          const sideAngle = this.calculateAngle(shoulder, hip, ankle);
+          const minSideAngle = cfg.MIN_SIDE_ANGLE ?? 155; // degrees
+
+          isGoodPosture = sideAngle >= minSideAngle;
+
+          // optional knee check when both ankles visible
+          if (isGoodPosture && ankleCenter) {
+            const leftKneeAngle = this.calculateAngle(leftHip, leftKnee, leftAnkle);
+            const rightKneeAngle = this.calculateAngle(rightHip, rightKnee, rightAnkle);
+            const kneeMin = cfg.KNEE_MIN_DEG ?? 150;
+            const kneeOk = (leftKneeAngle >= kneeMin) && (rightKneeAngle >= kneeMin);
+            isGoodPosture = isGoodPosture && kneeOk;
+          }
+
+        } else {
+          // Fallback: use center-based straightness + orientation as before (front-facing)
+          let cosSim = -1;
+          if (v2) {
+            const mag1 = Math.hypot(v1.x, v1.y) || 1;
+            const mag2 = Math.hypot(v2.x, v2.y) || 1;
+            cosSim = (v1.x * v2.x + v1.y * v2.y) / (mag1 * mag2);
+          }
+          const absCos = Math.abs(Math.max(-1, Math.min(1, cosSim)));
+          const straightEnough = v2 ? (absCos >= (cfg.STRAIGHT_ABS_COS_MIN ?? 0.90)) : false;
+          const dx = shoulderCenter.x - hipCenter.x;
+          const dy = shoulderCenter.y - hipCenter.y;
+          const orientDeg = Math.abs(Math.atan2(dy, dx) * 180 / Math.PI);
+          const horizMax = cfg.HORIZ_MAX_DEG ?? 35;
+          const nearHorizontal = (orientDeg <= horizMax) || (orientDeg >= (180 - horizMax));
+          let kneeOk = true;
+          if (ankleCenter) {
+            const leftKneeAngle = this.calculateAngle(leftHip, leftKnee, leftAnkle);
+            const rightKneeAngle = this.calculateAngle(rightHip, rightKnee, rightAnkle);
+            const kneeMin = cfg.KNEE_MIN_DEG ?? 150;
+            kneeOk = (leftKneeAngle >= kneeMin) && (rightKneeAngle >= kneeMin);
+          }
+          isGoodPosture = straightEnough && nearHorizontal && kneeOk;
         }
-        isGoodPosture = straightEnough && nearHorizontal && kneeOk;
+
       } else if (this.exerciseMode === 'squats') {
         // Squats: ensure hip angle not collapsed and torso tilt within range
         const scfg = window.MediaPipeConfig?.SQUAT_CONFIG || {};
@@ -320,7 +358,6 @@ class PoseDetectionUtils {
         const hipAngleMin = scfg.HIP_ANGLE_MIN ?? 150;
         const dx = shoulderCenter.x - hipCenter.x;
         const dy = shoulderCenter.y - hipCenter.y;
-        // Angle relative to vertical (0 is perfectly vertical torso)
         const torsoTiltDeg = Math.abs(Math.atan2(dx, -dy) * 180 / Math.PI);
         const tiltMax = scfg.TORSO_TILT_MAX ?? 45;
         isGoodPosture = (hipAngle >= hipAngleMin) && (torsoTiltDeg <= tiltMax);
